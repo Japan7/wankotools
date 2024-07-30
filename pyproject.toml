@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wankotools"
+dynamic = ["version"]
+license = {file = "LICENSE"}
+dependencies = [
+    "aiofiles",
+    "httpx",
+    "pydantic",
+    "typer",
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/Japan7/wankotools"
+Repository = "https://github.com/Japan7/wankotools.git"
+Issues = "https://github.com/Japan7/wankotools/issues"
+
+[project.scripts]
+wankosync = "wankotools.sync:wankosync"
+
+[tool.hatch.version]
+path = "wankotools/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/wankotools",
+]
+
+[tool.mypy]
+mypy_path = "typings"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "SIM", "I"]
