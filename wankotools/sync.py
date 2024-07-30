@@ -14,8 +14,6 @@ import typer
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-KARABERUS_HOST = "http://localhost:8888"
-
 
 class KaraberusKara(pydantic.BaseModel):
     ID: int
