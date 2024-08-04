@@ -8,6 +8,7 @@ from typing import Annotated, Any, Coroutine, Iterable
 
 import aiofiles
 import backoff
+import httpcore
 import httpx
 import pydantic
 import typer
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 download_backoff = backoff.on_exception(
     backoff.expo,
-    httpx.ReadTimeout,
+    (httpcore.ReadTimeout, httpx.ReadTimeout),
     max_time=150,
 )
 
