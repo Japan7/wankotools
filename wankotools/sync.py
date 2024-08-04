@@ -127,6 +127,9 @@ class DownloadRunner:
                 await coro
         except asyncio.QueueEmpty:
             pass
+        except Exception as e:
+            logger.exception(e)
+            raise
 
 
 async def sync(base_url: str, token: str, dest_dir: Path, parallel: int):
