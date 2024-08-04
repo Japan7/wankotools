@@ -150,7 +150,7 @@ def main(
     dest_dir: Annotated[
         Path, typer.Option("--directory", "-d", file_okay=False, dir_okay=True)
     ] = Path("."),
-    parallel: Annotated[int, typer.Option("--parallel", "-p")] = 10,
+    parallel: Annotated[int, typer.Option("--parallel", "-p")] = 4,
 ):
     asyncio.run(sync(base_url, token, dest_dir, parallel))
 
