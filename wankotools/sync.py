@@ -7,12 +7,20 @@ from pathlib import Path
 from typing import Annotated, Any, Coroutine, Iterable
 
 import aiofiles
+import backoff
 import httpx
 import pydantic
 import typer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+download_backoff = backoff.on_exception(
+    backoff.expo,
+    httpx.ReadTimeout,
+    max_time=150,
+)
 
 
 class KaraberusKara(pydantic.BaseModel):
@@ -50,6 +58,7 @@ class KaraberusClient:
         karas = KaraberusKarasResponse.model_validate(resp.json())
         return karas.Karas
 
+    @download_backoff
     async def _download(self, filename: Path, resp: httpx.Response, ts: float):
         resp.raise_for_status()
         logger.info(f"downloading {filename}")
