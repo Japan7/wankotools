@@ -116,7 +116,7 @@ class KaraberusClient:
 
 class DownloadRunner:
     def __init__(self, coros: Iterable[Coroutine[Any, Any, None]]) -> None:
-        self.queue: asyncio.Queue = asyncio.Queue()
+        self.queue: asyncio.Queue[Coroutine[Any, Any, None]] = asyncio.Queue()
         for coro in coros:
             self.queue.put_nowait(coro)
 
