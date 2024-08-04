@@ -59,7 +59,6 @@ class KaraberusClient:
         karas = KaraberusKarasResponse.model_validate(resp.json())
         return karas.Karas
 
-    @download_backoff
     async def _download(self, filename: Path, resp: httpx.Response, ts: float):
         resp.raise_for_status()
         logger.info(f"downloading {filename}")
@@ -74,6 +73,7 @@ class KaraberusClient:
         # add 1 second just in case
         os.utime(filename, (ts + 1, ts + 1))
 
+    @download_backoff
     async def download(self, kara: KaraberusKara) -> None:
         kid = kara.ID
         vid_filename = self.base_dir / f"{kid}.mkv"
