@@ -38,15 +38,28 @@ class KaraberusKarasResponse(pydantic.BaseModel):
     Karas: list[KaraberusKara]
 
 
+class Font(pydantic.BaseModel):
+    ID: int
+    Name: str
+
+
+class KaraberusFontsResponse(pydantic.BaseModel):
+    Fonts: list[Font]
+
+
 class KaraberusClient:
     def __init__(self, client: httpx.AsyncClient, base_url: str, base_dir: Path):
         self.base_url = base_url.rstrip("/")
         self.client = client
         self.base_dir = base_dir
+        self.karas_base_dir = base_dir / "karas"
+        self.fonts_base_dir = base_dir / "fonts"
         self.init_base_dir()
 
     def init_base_dir(self):
-        self.base_dir.mkdir(exist_ok=True, parents=True)
+        self.karas_base_dir.mkdir(exist_ok=True, parents=True)
+        self.fonts_base_dir.mkdir(exist_ok=True, parents=True)
+
         gitignore = self.base_dir / ".gitignore"
         if not gitignore.exists():
             gitignore.write_text("*")
@@ -59,7 +72,14 @@ class KaraberusClient:
         karas = KaraberusKarasResponse.model_validate(resp.json())
         return karas.Karas
 
-    async def _download(self, filename: Path, resp: httpx.Response, ts: float):
+    async def get_fonts(self) -> list[Font]:
+        font_endpoint = f"{self.base_url}/api/kara"
+        resp = await self.client.get(font_endpoint)
+        resp.raise_for_status()
+        fonts = KaraberusFontsResponse.model_validate(resp.json())
+        return fonts.Fonts
+
+    async def _download(self, filename: Path, resp: httpx.Response, ts: float | None):
         resp.raise_for_status()
         logger.info(f"downloading {filename}")
         try:
@@ -70,13 +90,18 @@ class KaraberusClient:
             await asyncio.to_thread(filename.unlink)
             raise
 
-        # add 1 second just in case
-        os.utime(filename, (ts + 1, ts + 1))
+        if ts is not None:
+            # add 1 second just in case
+            os.utime(filename, (ts + 1, ts + 1))
 
     @download_backoff
+    async def download_url(self, url: str, filename: Path, ts: float | None):
+        resp = await self.client.get(url)
+        await self._download(filename, resp, ts)
+
     async def download(self, kara: KaraberusKara) -> None:
         kid = kara.ID
-        vid_filename = self.base_dir / f"{kid}.mkv"
+        vid_filename = self.karas_base_dir / f"{kid}.mkv"
         try:
             vid_stat = await asyncio.to_thread(vid_filename.stat)
             vid_mtime = vid_stat.st_mtime
@@ -85,10 +110,9 @@ class KaraberusClient:
         vid_ts = kara.VideoModTime.timestamp()
         if kara.VideoUploaded and vid_ts > vid_mtime:
             endpoint = f"{self.base_url}/api/kara/{kid}/download/video"
-            resp = await self.client.get(endpoint)
-            await self._download(vid_filename, resp, vid_ts)
+            await self.download_url(endpoint, vid_filename, vid_ts)
 
-        sub_filename = self.base_dir / f"{kid}.ass"
+        sub_filename = self.karas_base_dir / f"{kid}.ass"
         try:
             sub_stat = await asyncio.to_thread(sub_filename.stat)
             sub_mtime = sub_stat.st_mtime
@@ -98,10 +122,9 @@ class KaraberusClient:
         sub_ts = kara.SubtitlesModTime.timestamp()
         if kara.SubtitlesUploaded and sub_ts > sub_mtime:
             endpoint = f"{self.base_url}/api/kara/{kid}/download/sub"
-            resp = await self.client.get(endpoint)
-            await self._download(sub_filename, resp, sub_ts)
+            await self.download_url(endpoint, sub_filename, sub_ts)
 
-        inst_filename = self.base_dir / f"{kid}.mka"
+        inst_filename = self.karas_base_dir / f"{kid}.mka"
         try:
             inst_stat = await asyncio.to_thread(inst_filename.stat)
             inst_mtime = inst_stat.st_mtime
@@ -111,8 +134,15 @@ class KaraberusClient:
         inst_ts = kara.InstrumentalModTime.timestamp()
         if kara.InstrumentalUploaded and inst_ts > inst_mtime:
             endpoint = f"{self.base_url}/api/kara/{kid}/download/inst"
-            resp = await self.client.get(endpoint)
-            await self._download(inst_filename, resp, inst_ts)
+            await self.download_url(endpoint, inst_filename, inst_ts)
+
+    async def download_font(self, font: Font) -> None:
+        font_filename = self.fonts_base_dir / f"{font.ID}.ttf"
+        if font_filename.exists():
+            return
+
+        endpoint = f"{self.base_url}/api/font/{font.ID}/download"
+        await self.download_url(endpoint, font_filename, None)
 
 
 class DownloadRunner:
