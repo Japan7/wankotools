@@ -53,9 +53,14 @@ class KaraberusClient:
     async def _download(self, filename: Path, resp: httpx.Response, ts: float):
         resp.raise_for_status()
         logger.info(f"downloading {filename}")
-        async with aiofiles.open(filename, "wb") as f:
-            for data in resp.iter_bytes(1024 * 1024):
-                await f.write(data)
+        try:
+            async with aiofiles.open(filename, "wb") as f:
+                for data in resp.iter_bytes(1024 * 1024):
+                    await f.write(data)
+        except Exception:
+            await asyncio.to_thread(filename.unlink)
+            raise
+
         # add 1 second just in case
         os.utime(filename, (ts + 1, ts + 1))
 
