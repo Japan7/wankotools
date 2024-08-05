@@ -163,7 +163,7 @@ class DownloadRunner:
             raise
 
 
-async def sync(base_url: str, token: str, dest_dir: Path, parallel: int):
+async def sync(base_url: str, token: str, dest_dir: Path, parallel: int = 4):
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(headers=headers) as hclient:
         client = KaraberusClient(hclient, base_url, dest_dir)
