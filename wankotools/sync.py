@@ -48,7 +48,7 @@ class KaraberusFontsResponse(pydantic.BaseModel):
     Fonts: list[Font]
 
 
-range_parser = re.compile(r"bytes=(\d+)-(\d+)/(\d+)")
+content_range_parser = re.compile(r"bytes (\d+)-(\d+)/(\d+)")
 
 
 class KaraberusClient:
@@ -87,10 +87,10 @@ class KaraberusClient:
         resp.raise_for_status()
         logger.info(f"downloading {filename}")
         try:
-            range_parsed = range_parser.match(resp.headers["Range"])
-            if range_parsed is None:
-                raise RuntimeError("no Range header")
-            expected = int(range_parsed.group(3))
+            content_range_parsed = content_range_parser.match(resp.headers["Content-Range"])
+            if content_range_parsed is None:
+                raise RuntimeError("no Content-Range header")
+            expected = int(content_range_parsed.group(3))
 
             async with aiofiles.open(filename, "wb") as f:
                 for data in resp.iter_bytes(1024 * 64):
@@ -179,7 +179,7 @@ class DownloadRunner:
 
 
 async def sync(base_url: str, token: str, dest_dir: Path, parallel: int = 4):
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", "Range": "bytes=0-"}
     timeout = httpx.Timeout(connect=10, read=300, write=300, pool=10)
     async with httpx.AsyncClient(headers=headers, timeout=timeout) as hclient:
         client = KaraberusClient(hclient, base_url, dest_dir)
