@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Annotated, Any, Coroutine, Iterable
 
@@ -47,6 +48,9 @@ class KaraberusFontsResponse(pydantic.BaseModel):
     Fonts: list[Font]
 
 
+range_parser = re.compile(r"bytes=(\d+)-(\d+)/(\d+)")
+
+
 class KaraberusClient:
     def __init__(self, client: httpx.AsyncClient, base_url: str, base_dir: Path):
         self.base_url = base_url.rstrip("/")
@@ -83,9 +87,20 @@ class KaraberusClient:
         resp.raise_for_status()
         logger.info(f"downloading {filename}")
         try:
+            range_parsed = range_parser.match(resp.headers["Range"])
+            if range_parsed is None:
+                raise RuntimeError("no Range header")
+            expected = int(range_parsed.group(3))
+
             async with aiofiles.open(filename, "wb") as f:
-                for data in resp.iter_bytes(1024 * 1024):
+                for data in resp.iter_bytes(1024 * 64):
                     await f.write(data)
+
+                written = await f.tell()
+                if written != expected:
+                    raise RuntimeError(
+                        f"downloaded {written} bytes when file is {expected} bytes"
+                    )
         except Exception:
             await asyncio.to_thread(filename.unlink)
             raise
