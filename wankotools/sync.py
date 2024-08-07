@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import asyncio
 import datetime
+import itertools
 import logging
 import os
 import re
@@ -75,7 +76,7 @@ class KaraberusClient:
         return karas.Karas
 
     async def get_fonts(self) -> list[Font]:
-        font_endpoint = f"{self.base_url}/api/kara"
+        font_endpoint = f"{self.base_url}/api/font"
         resp = await self.client.get(font_endpoint)
         resp.raise_for_status()
         fonts = KaraberusFontsResponse.model_validate(resp.json())
@@ -181,9 +182,13 @@ async def sync(base_url: str, token: str, dest_dir: Path, parallel: int = 4):
     timeout = httpx.Timeout(connect=10, read=300, write=300, pool=10)
     async with httpx.AsyncClient(headers=headers, timeout=timeout) as hclient:
         client = KaraberusClient(hclient, base_url, dest_dir)
+        fonts = await client.get_fonts()
         karas = await client.get_karas()
 
-        downloads = DownloadRunner(client.download(kara) for kara in karas)
+        font_coros = (client.download_font(font) for font in fonts)
+        kara_coros = (client.download(kara) for kara in karas)
+
+        downloads = DownloadRunner(itertools.chain(font_coros, kara_coros))
         async with asyncio.TaskGroup() as t:
             for _ in range(parallel):
                 t.create_task(downloads.run())
