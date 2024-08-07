@@ -14,9 +14,7 @@ import httpx
 import pydantic
 import typer
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 download_backoff = backoff.on_exception(
     backoff.expo,

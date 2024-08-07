@@ -25,6 +25,7 @@ Issues = "https://github.com/Japan7/wankotools/issues"
 
 [project.scripts]
 wankosync = "wankotools.sync:wankosync"
+wankofonts = "wankotools.fonts:wankofonts"
 
 [tool.hatch.version]
 path = "wankotools/__init__.py"
