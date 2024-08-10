@@ -17,9 +17,14 @@ import typer
 
 logger = logging.getLogger(__name__)
 
+
+class KaraberusIncompleteDownloadError(RuntimeError):
+    pass
+
+
 download_backoff = backoff.on_exception(
     backoff.expo,
-    (httpcore.ReadTimeout, httpx.ReadTimeout),
+    (httpcore.ReadTimeout, httpx.ReadTimeout, KaraberusIncompleteDownloadError),
     max_time=150,
 )
 
@@ -86,7 +91,9 @@ class KaraberusClient:
         resp.raise_for_status()
         logger.info(f"downloading {filename}")
         try:
-            content_range_parsed = content_range_parser.match(resp.headers["Content-Range"])
+            content_range_parsed = content_range_parser.match(
+                resp.headers["Content-Range"]
+            )
             if content_range_parsed is None:
                 raise RuntimeError("no Content-Range header")
             expected = int(content_range_parsed.group(3))
@@ -97,7 +104,7 @@ class KaraberusClient:
 
                 written = await f.tell()
                 if written != expected:
-                    raise RuntimeError(
+                    raise KaraberusIncompleteDownloadError(
                         f"downloaded {written} bytes when file is {expected} bytes"
                     )
         except Exception:
