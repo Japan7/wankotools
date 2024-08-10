@@ -186,7 +186,7 @@ class DownloadRunner:
 
 async def sync(base_url: str, token: str, dest_dir: Path, parallel: int = 4):
     headers = {"Authorization": f"Bearer {token}", "Range": "bytes=0-"}
-    timeout = httpx.Timeout(connect=10, read=300, write=300, pool=10)
+    timeout = httpx.Timeout(connect=10, read=600, write=300, pool=10)
     async with httpx.AsyncClient(headers=headers, timeout=timeout) as hclient:
         client = KaraberusClient(hclient, base_url, dest_dir)
         fonts = await client.get_fonts()
