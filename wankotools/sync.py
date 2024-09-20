@@ -6,12 +6,13 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Any, Coroutine, Iterable
+from typing import Annotated, Any, Coroutine, Iterable, Literal
 
 import aiofiles
 import backoff
 import httpcore
 import httpx
+import minio
 import pydantic
 import typer
 
@@ -56,12 +57,19 @@ content_range_parser = re.compile(r"bytes (\d+)-(\d+)/(\d+)")
 
 
 class KaraberusClient:
-    def __init__(self, client: httpx.AsyncClient, base_url: str, base_dir: Path):
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        s3_client: minio.Minio,
+        base_url: str,
+        base_dir: Path,
+    ):
         self.base_url = base_url.rstrip("/")
         self.client = client
         self.base_dir = base_dir
         self.karas_base_dir = base_dir / "karas"
         self.fonts_base_dir = base_dir / "fonts"
+        self.s3_client = s3_client
         self.init_base_dir()
 
     def init_base_dir(self):
@@ -120,6 +128,31 @@ class KaraberusClient:
         resp = await self.client.get(url)
         await self._download(filename, resp, ts)
 
+    async def download_file(
+        self,
+        ftype: Literal["video", "sub", "inst", 'font'],
+        id: int,
+        filename: Path,
+        ts: float | None,
+    ):
+        filename.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            logger.info(f'downloading {filename}')
+            await asyncio.to_thread(
+                self.s3_client.fget_object,
+                "karaberus",
+                f"{ftype}/{id}",
+                str(filename),
+            )
+
+            if ts is not None:
+                # add 1 second just in case
+                os.utime(filename, (ts + 1, ts + 1))
+
+        except Exception:
+            await asyncio.to_thread(filename.unlink)
+            raise
+
     async def download(self, kara: KaraberusKara) -> None:
         kid = kara.ID
         vid_filename = self.karas_base_dir / f"{kid}.mkv"
@@ -130,8 +163,7 @@ class KaraberusClient:
             vid_mtime = 0
         vid_ts = kara.VideoModTime.timestamp()
         if kara.VideoUploaded and vid_ts > vid_mtime:
-            endpoint = f"{self.base_url}/api/kara/{kid}/download/video"
-            await self.download_url(endpoint, vid_filename, vid_ts)
+            await self.download_file("video", kid, vid_filename, vid_ts)
 
         sub_filename = self.karas_base_dir / f"{kid}.ass"
         try:
@@ -142,8 +174,7 @@ class KaraberusClient:
 
         sub_ts = kara.SubtitlesModTime.timestamp()
         if kara.SubtitlesUploaded and sub_ts > sub_mtime:
-            endpoint = f"{self.base_url}/api/kara/{kid}/download/sub"
-            await self.download_url(endpoint, sub_filename, sub_ts)
+            await self.download_file("sub", kid, sub_filename, sub_ts)
 
         inst_filename = self.karas_base_dir / f"{kid}.mka"
         try:
@@ -154,16 +185,14 @@ class KaraberusClient:
 
         inst_ts = kara.InstrumentalModTime.timestamp()
         if kara.InstrumentalUploaded and inst_ts > inst_mtime:
-            endpoint = f"{self.base_url}/api/kara/{kid}/download/inst"
-            await self.download_url(endpoint, inst_filename, inst_ts)
+            await self.download_file("inst", kid, inst_filename, inst_ts)
 
     async def download_font(self, font: Font) -> None:
         font_filename = self.fonts_base_dir / f"{font.ID}.ttf"
         if font_filename.exists():
             return
 
-        endpoint = f"{self.base_url}/api/font/{font.ID}/download"
-        await self.download_url(endpoint, font_filename, None)
+        await self.download_file('font', font.ID, font_filename, None)
 
 
 class DownloadRunner:
@@ -184,11 +213,30 @@ class DownloadRunner:
             raise
 
 
-async def sync(base_url: str, token: str, dest_dir: Path, parallel: int = 4):
+async def sync(
+    base_url: str,
+    token: str,
+    s3_endpoint: str,
+    s3_access_key: str,
+    s3_secret_key: str,
+    s3_secure: bool,
+    s3_region: str,
+    dest_dir: Path,
+    parallel: int = 4,
+):
     headers = {"Authorization": f"Bearer {token}", "Range": "bytes=0-"}
     timeout = httpx.Timeout(connect=10, read=600, write=300, pool=10)
+
+    s3_client = minio.Minio(
+        endpoint=s3_endpoint,
+        access_key=s3_access_key,
+        secret_key=s3_secret_key,
+        secure=s3_secure,
+        region=s3_region,
+    )
+
     async with httpx.AsyncClient(headers=headers, timeout=timeout) as hclient:
-        client = KaraberusClient(hclient, base_url, dest_dir)
+        client = KaraberusClient(hclient, s3_client, base_url, dest_dir)
         fonts = await client.get_fonts()
         karas = await client.get_karas()
 
@@ -204,12 +252,29 @@ async def sync(base_url: str, token: str, dest_dir: Path, parallel: int = 4):
 def main(
     base_url: str,
     token: str,
+    s3_endpoint: str,
+    s3_access_key: str,
+    s3_secret_key: str,
+    s3_secure: Annotated[bool, typer.Option("--s3-secure", "-s")] = False,
+    s3_region: str = 'garage',
     dest_dir: Annotated[
         Path, typer.Option("--directory", "-d", file_okay=False, dir_okay=True)
     ] = Path("."),
     parallel: Annotated[int, typer.Option("--parallel", "-p")] = 4,
 ):
-    asyncio.run(sync(base_url, token, dest_dir, parallel))
+    asyncio.run(
+        sync(
+            base_url,
+            token,
+            s3_endpoint,
+            s3_access_key,
+            s3_secret_key,
+            s3_secure,
+            s3_region,
+            dest_dir,
+            parallel,
+        )
+    )
 
 
 def wankosync():

@@ -10,6 +10,7 @@ dependencies = [
     "aiofiles",
     "backoff",
     "httpx",
+    "minio",
     "pydantic",
     "typer",
 ]
