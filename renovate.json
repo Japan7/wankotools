@@ -1,7 +1,0 @@
-{
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "local>Japan7/renovate-config",
-    "github>Japan7/renovate-config:python"
-  ]
-}
