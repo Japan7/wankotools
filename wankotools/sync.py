@@ -1,15 +1,14 @@
 #!/usr/bin/env python
 import asyncio
 import datetime
-import itertools
 import logging
 import os
 import re
-from collections.abc import Coroutine, Iterable
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 import aiofiles
+import aiojobs
 import backoff
 import httpcore
 import httpx
@@ -72,6 +71,28 @@ class KaraberusClient:
         self.fonts_base_dir = base_dir / "fonts"
         self.s3_client = s3_client
         self.init_base_dir()
+        self.karas: dict[int, KaraberusKara] = {}
+        self.fonts: dict[int, Font] = {}
+
+    async def __aenter__(self):
+        async with asyncio.TaskGroup() as tg:
+            _ = tg.create_task(self._load_fonts())
+            _ = tg.create_task(self._get_karas())
+
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+    async def _load_karas(self):
+        karas = await self._get_karas()
+        for k in karas:
+            self.karas[k.ID] = k
+
+    async def _load_fonts(self):
+        fonts = await self._get_fonts()
+        for f in fonts:
+            self.fonts[f.ID] = f
 
     def init_base_dir(self):
         self.karas_base_dir.mkdir(exist_ok=True, parents=True)
@@ -81,7 +102,7 @@ class KaraberusClient:
         if not gitignore.exists():
             _ = gitignore.write_text("*")
 
-    async def get_karas(self) -> list[KaraberusKara]:
+    async def _get_karas(self) -> list[KaraberusKara]:
         kara_endpoint = f"{self.base_url}/api/kara"
 
         resp = await self.client.get(kara_endpoint)
@@ -89,7 +110,7 @@ class KaraberusClient:
         karas = KaraberusKarasResponse.model_validate(resp.json())
         return karas.Karas
 
-    async def get_fonts(self) -> list[Font]:
+    async def _get_fonts(self) -> list[Font]:
         font_endpoint = f"{self.base_url}/api/font"
         resp = await self.client.get(font_endpoint)
         _ = resp.raise_for_status()
@@ -196,24 +217,6 @@ class KaraberusClient:
         await self.download_file('font', font.ID, font_filename, None)
 
 
-class DownloadRunner:
-    def __init__(self, coros: Iterable[Coroutine[Any, Any, None]]) -> None:
-        self.queue: asyncio.Queue[Coroutine[Any, Any, None]] = asyncio.Queue()
-        for coro in coros:
-            self.queue.put_nowait(coro)
-
-    async def run(self):
-        try:
-            while True:
-                coro = self.queue.get_nowait()
-                await coro
-        except asyncio.QueueEmpty:
-            pass
-        except Exception as e:
-            logger.exception(e)
-            raise
-
-
 async def sync(
     base_url: str,
     token: str,
@@ -236,18 +239,18 @@ async def sync(
         region=s3_region,
     )
 
-    async with httpx.AsyncClient(headers=headers, timeout=timeout) as hclient:
-        client = KaraberusClient(hclient, s3_client, base_url, dest_dir)
-        fonts = await client.get_fonts()
-        karas = await client.get_karas()
+    async with (
+        httpx.AsyncClient(headers=headers, timeout=timeout) as hclient,
+        KaraberusClient(hclient, s3_client, base_url, dest_dir) as client,
+        aiojobs.Scheduler(limit=parallel) as sched
+    ):
+        fonts = client.fonts.copy()
+        for font in fonts.values():
+            _ = await sched.spawn(client.download_font(font))
 
-        font_coros = (client.download_font(font) for font in fonts)
-        kara_coros = (client.download(kara) for kara in karas)
-
-        downloads = DownloadRunner(itertools.chain(font_coros, kara_coros))
-        async with asyncio.TaskGroup() as t:
-            for _ in range(parallel):
-                _ = t.create_task(downloads.run())
+        karas = client.karas.copy()
+        for kara in karas.values():
+            _ = await sched.spawn(client.download(kara))
 
 
 def main(
