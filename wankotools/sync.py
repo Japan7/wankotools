@@ -5,8 +5,9 @@ import itertools
 import logging
 import os
 import re
+from collections.abc import Coroutine, Iterable
 from pathlib import Path
-from typing import Annotated, Any, Coroutine, Iterable, Literal
+from typing import Annotated, Any, Literal
 
 import aiofiles
 import backoff
@@ -78,25 +79,25 @@ class KaraberusClient:
 
         gitignore = self.base_dir / ".gitignore"
         if not gitignore.exists():
-            gitignore.write_text("*")
+            _ = gitignore.write_text("*")
 
     async def get_karas(self) -> list[KaraberusKara]:
         kara_endpoint = f"{self.base_url}/api/kara"
 
         resp = await self.client.get(kara_endpoint)
-        resp.raise_for_status()
+        _ = resp.raise_for_status()
         karas = KaraberusKarasResponse.model_validate(resp.json())
         return karas.Karas
 
     async def get_fonts(self) -> list[Font]:
         font_endpoint = f"{self.base_url}/api/font"
         resp = await self.client.get(font_endpoint)
-        resp.raise_for_status()
+        _ = resp.raise_for_status()
         fonts = KaraberusFontsResponse.model_validate(resp.json())
         return fonts.Fonts
 
     async def _download(self, filename: Path, resp: httpx.Response, ts: float | None):
-        resp.raise_for_status()
+        _ = resp.raise_for_status()
         logger.info(f"downloading {filename}")
         try:
             content_range_parsed = content_range_parser.match(
@@ -108,7 +109,7 @@ class KaraberusClient:
 
             async with aiofiles.open(filename, "wb") as f:
                 for data in resp.iter_bytes(1024 * 64):
-                    await f.write(data)
+                    _ = await f.write(data)
 
                 written = await f.tell()
                 if written != expected:
@@ -138,7 +139,7 @@ class KaraberusClient:
         filename.parent.mkdir(parents=True, exist_ok=True)
         try:
             logger.info(f'downloading {filename}')
-            await asyncio.to_thread(
+            _ = await asyncio.to_thread(
                 self.s3_client.fget_object,
                 "karaberus",
                 f"{ftype}/{id}",
@@ -246,7 +247,7 @@ async def sync(
         downloads = DownloadRunner(itertools.chain(font_coros, kara_coros))
         async with asyncio.TaskGroup() as t:
             for _ in range(parallel):
-                t.create_task(downloads.run())
+                _ = t.create_task(downloads.run())
 
 
 def main(
@@ -258,10 +259,13 @@ def main(
     s3_secure: Annotated[bool, typer.Option("--s3-secure", "-s")] = False,
     s3_region: str = 'garage',
     dest_dir: Annotated[
-        Path, typer.Option("--directory", "-d", file_okay=False, dir_okay=True)
-    ] = Path("."),
+        Path | None, typer.Option("--directory", "-d", file_okay=False, dir_okay=True)
+    ] = None,
     parallel: Annotated[int, typer.Option("--parallel", "-p")] = 4,
 ):
+    if dest_dir is None:
+        dest_dir = Path(".")
+
     asyncio.run(
         sync(
             base_url,
