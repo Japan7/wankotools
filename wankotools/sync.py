@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 from types import TracebackType
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypedDict
 
 import aiofiles
 import aiojobs
@@ -39,6 +39,10 @@ class KaraberusKara(pydantic.BaseModel):
     SubtitlesModTime: datetime.datetime
     InstrumentalUploaded: bool
     InstrumentalModTime: datetime.datetime
+
+
+class KaraberusKaraResponse(pydantic.BaseModel):
+    kara: KaraberusKara
 
 
 class KaraberusKarasResponse(pydantic.BaseModel):
@@ -78,10 +82,6 @@ class KaraberusClient:
 
     async def __aenter__(self):
         _ = await self.client.__aenter__()
-        async with asyncio.TaskGroup() as tg:
-            _ = tg.create_task(self._load_fonts())
-            _ = tg.create_task(self._get_karas())
-
         return self
 
     async def __aexit__(
@@ -92,16 +92,6 @@ class KaraberusClient:
     ):
         await self.client.__aexit__(exc_type, exc_value, traceback)
 
-    async def _load_karas(self):
-        karas = await self._get_karas()
-        for k in karas:
-            self.karas[k.ID] = k
-
-    async def _load_fonts(self):
-        fonts = await self._get_fonts()
-        for f in fonts:
-            self.fonts[f.ID] = f
-
     def init_base_dir(self):
         self.karas_base_dir.mkdir(exist_ok=True, parents=True)
         self.fonts_base_dir.mkdir(exist_ok=True, parents=True)
@@ -110,15 +100,30 @@ class KaraberusClient:
         if not gitignore.exists():
             _ = gitignore.write_text("*")
 
-    async def _get_karas(self) -> list[KaraberusKara]:
+    async def get_karas(self) -> list[KaraberusKara]:
         kara_endpoint = f"{self.base_url}/api/kara"
 
         resp = await self.client.get(kara_endpoint)
         _ = resp.raise_for_status()
         karas = KaraberusKarasResponse.model_validate(resp.json())
+        for kara in karas.Karas:
+            self.karas[kara.ID] = kara
+
         return karas.Karas
 
-    async def _get_fonts(self) -> list[Font]:
+    async def get_kara(self, kid: int) -> KaraberusKara:
+        if kara := self.karas.get(kid):
+            return kara
+
+        kara_endpoint = f"{self.base_url}/api/kara/{kid}"
+
+        resp = await self.client.get(kara_endpoint)
+        _ = resp.raise_for_status()
+        kara_resp = KaraberusKaraResponse.model_validate(resp.json())
+        self.karas[kid] = kara_resp.kara
+        return kara_resp.kara
+
+    async def get_fonts(self) -> list[Font]:
         font_endpoint = f"{self.base_url}/api/font"
         resp = await self.client.get(font_endpoint)
         _ = resp.raise_for_status()
@@ -183,8 +188,9 @@ class KaraberusClient:
             await asyncio.to_thread(filename.unlink)
             raise
 
-    async def download(self, kara: KaraberusKara) -> None:
-        kid = kara.ID
+    async def download(self, kid: int) -> None:
+        kara = await self.get_kara(kid)
+
         vid_filename = self.karas_base_dir / f"{kid}.mkv"
         try:
             vid_stat = await asyncio.to_thread(vid_filename.stat)
@@ -225,6 +231,47 @@ class KaraberusClient:
         await self.download_file("font", font.ID, font_filename, None)
 
 
+class DakaraSong(TypedDict):
+    id: int
+    filename: str
+
+
+class DakaraPlaylistEntry(TypedDict):
+    id: int
+    song: DakaraSong
+
+
+class DakaraPlaylistEntries(TypedDict):
+    results: list[DakaraPlaylistEntry]
+
+
+class DakaraClient:
+    def __init__(self, base_url: str, token: str):
+        headers = {"Authorization": f"Token {token}"}
+        self.client = httpx.AsyncClient(headers=headers)
+        self.base_url = base_url
+
+    async def __aenter__(self):
+        _ = await self.client.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
+        await self.client.__aexit__(exc_type, exc_value, traceback)
+
+    async def get_playlist_entries(self) -> DakaraPlaylistEntries:
+        url = f"{self.base_url}/api/playlist/entries/"
+
+        resp = await self.client.get(url)
+        _ = resp.raise_for_status()
+        data: DakaraPlaylistEntries = resp.json()
+        return data
+
+
 async def sync(
     base_url: str,
     token: str,
@@ -248,13 +295,56 @@ async def sync(
         KaraberusClient(s3_client, base_url, dest_dir, token) as client,
         aiojobs.Scheduler(limit=parallel) as sched,
     ):
+        fonts = await client.get_fonts()
+        for font in fonts:
+            _ = await sched.spawn(client.download_font(font))
+
+        karas = await client.get_karas()
+        for kara in karas:
+            _ = await sched.spawn(client.download(kara.ID))
+
+
+async def watch(
+    karaberus_base_url: str,
+    karaberus_token: str,
+    s3_endpoint: str,
+    s3_access_key: str,
+    s3_secret_key: str,
+    s3_secure: bool,
+    s3_region: str,
+    dest_dir: Path,
+    dakara_base_url: str,
+    dakara_token: str,
+    parallel: int = 4,
+):
+    s3_client = minio.Minio(
+        endpoint=s3_endpoint,
+        access_key=s3_access_key,
+        secret_key=s3_secret_key,
+        secure=s3_secure,
+        region=s3_region,
+    )
+
+    async with (
+        KaraberusClient(
+            s3_client, karaberus_base_url, dest_dir, karaberus_token
+        ) as client,
+        DakaraClient(dakara_base_url, dakara_token) as dakara,
+        aiojobs.Scheduler(limit=parallel) as sched,
+    ):
         fonts = client.fonts.copy()
         for font in fonts.values():
             _ = await sched.spawn(client.download_font(font))
 
-        karas = client.karas.copy()
-        for kara in karas.values():
-            _ = await sched.spawn(client.download(kara))
+        while True:
+            playlist = await dakara.get_playlist_entries()
+            for entry in playlist["results"]:
+                filename = entry["song"]["filename"]
+                karaberus_id_str, *_ = filename.partition(".")
+                karaberus_id = int(karaberus_id_str)
+                _ = await sched.spawn(client.download(karaberus_id))
+
+            await asyncio.sleep(10)
 
 
 def main(
