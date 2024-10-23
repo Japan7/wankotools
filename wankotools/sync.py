@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from types import TracebackType
 from typing import Annotated, Literal
 
 import aiofiles
@@ -59,13 +60,14 @@ content_range_parser = re.compile(r"bytes (\d+)-(\d+)/(\d+)")
 class KaraberusClient:
     def __init__(
         self,
-        client: httpx.AsyncClient,
         s3_client: minio.Minio,
         base_url: str,
         base_dir: Path,
+        token: str,
     ):
         self.base_url = base_url.rstrip("/")
-        self.client = client
+        headers = {"Authorization": f"Bearer {token}", "Range": "bytes=0-"}
+        self.client = httpx.AsyncClient(headers=headers)
         self.base_dir = base_dir
         self.karas_base_dir = base_dir / "karas"
         self.fonts_base_dir = base_dir / "fonts"
@@ -75,14 +77,20 @@ class KaraberusClient:
         self.fonts: dict[int, Font] = {}
 
     async def __aenter__(self):
+        _ = await self.client.__aenter__()
         async with asyncio.TaskGroup() as tg:
             _ = tg.create_task(self._load_fonts())
             _ = tg.create_task(self._get_karas())
 
         return self
 
-    async def __aexit__(self, *_):
-        pass
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
+        await self.client.__aexit__(exc_type, exc_value, traceback)
 
     async def _load_karas(self):
         karas = await self._get_karas()
@@ -152,14 +160,14 @@ class KaraberusClient:
 
     async def download_file(
         self,
-        ftype: Literal["video", "sub", "inst", 'font'],
+        ftype: Literal["video", "sub", "inst", "font"],
         id: int,
         filename: Path,
         ts: float | None,
     ):
         filename.parent.mkdir(parents=True, exist_ok=True)
         try:
-            logger.info(f'downloading {filename}')
+            logger.info(f"downloading {filename}")
             _ = await asyncio.to_thread(
                 self.s3_client.fget_object,
                 "karaberus",
@@ -214,7 +222,7 @@ class KaraberusClient:
         if font_filename.exists():
             return
 
-        await self.download_file('font', font.ID, font_filename, None)
+        await self.download_file("font", font.ID, font_filename, None)
 
 
 async def sync(
@@ -228,9 +236,6 @@ async def sync(
     dest_dir: Path,
     parallel: int = 4,
 ):
-    headers = {"Authorization": f"Bearer {token}", "Range": "bytes=0-"}
-    timeout = httpx.Timeout(connect=10, read=600, write=300, pool=10)
-
     s3_client = minio.Minio(
         endpoint=s3_endpoint,
         access_key=s3_access_key,
@@ -240,9 +245,8 @@ async def sync(
     )
 
     async with (
-        httpx.AsyncClient(headers=headers, timeout=timeout) as hclient,
-        KaraberusClient(hclient, s3_client, base_url, dest_dir) as client,
-        aiojobs.Scheduler(limit=parallel) as sched
+        KaraberusClient(s3_client, base_url, dest_dir, token) as client,
+        aiojobs.Scheduler(limit=parallel) as sched,
     ):
         fonts = client.fonts.copy()
         for font in fonts.values():
@@ -260,7 +264,7 @@ def main(
     s3_access_key: str,
     s3_secret_key: str,
     s3_secure: Annotated[bool, typer.Option("--s3-secure", "-s")] = False,
-    s3_region: str = 'garage',
+    s3_region: str = "garage",
     dest_dir: Annotated[
         Path | None, typer.Option("--directory", "-d", file_okay=False, dir_okay=True)
     ] = None,
