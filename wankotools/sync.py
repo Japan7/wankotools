@@ -184,7 +184,7 @@ class KaraberusClient:
                 # add 1 second just in case
                 os.utime(filename, (ts + 1, ts + 1))
 
-        except Exception:
+        except BaseException:
             await asyncio.to_thread(filename.unlink)
             raise
 
