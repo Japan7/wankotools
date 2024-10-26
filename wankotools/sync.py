@@ -4,6 +4,8 @@ import datetime
 import logging
 import os
 import re
+import zlib
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from types import TracebackType
 from typing import Annotated, Literal, TypedDict
@@ -31,14 +33,35 @@ download_backoff = backoff.on_exception(
 )
 
 
+def _calculate_crc32(file: Path) -> int:
+    sum = 0
+    with file.open("rb") as fd:
+        while buf := fd.read(1024 * 8):
+            sum = zlib.crc32(buf, sum)
+
+    return sum
+
+
+async def calculate_crc32(file: Path) -> int:
+    with ProcessPoolExecutor() as pool:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(pool, _calculate_crc32, file)
+
+
 class KaraberusKara(pydantic.BaseModel):
     ID: int
     VideoUploaded: bool
     VideoModTime: datetime.datetime
+    VideoSize: int
+    VideoCRC32: int
     SubtitlesUploaded: bool
     SubtitlesModTime: datetime.datetime
+    SubtitlesSize: int
+    SubtitlesCRC32: int
     InstrumentalUploaded: bool
     InstrumentalModTime: datetime.datetime
+    InstrumentalSize: int
+    InstrumentalCRC32: int
 
 
 class KaraberusKaraResponse(pydantic.BaseModel):
@@ -184,43 +207,72 @@ class KaraberusClient:
                 # add 1 second just in case
                 os.utime(filename, (ts + 1, ts + 1))
 
-        except BaseException:
+        except BaseException as e:
+            logger.exception(e)
             await asyncio.to_thread(filename.unlink)
             raise
 
-    async def download(self, kid: int) -> None:
+    async def download(self, kid: int, check_crc32: bool = False) -> None:
         kara = await self.get_kara(kid)
 
         vid_filename = self.karas_base_dir / f"{kid}.mkv"
+        vid_crc32 = 0
         try:
             vid_stat = await asyncio.to_thread(vid_filename.stat)
             vid_mtime = vid_stat.st_mtime
+            vid_size = vid_stat.st_size
+            if check_crc32:
+                vid_crc32 = await calculate_crc32(vid_filename)
         except FileNotFoundError:
             vid_mtime = 0
+            vid_size = 0
+
         vid_ts = kara.VideoModTime.timestamp()
-        if kara.VideoUploaded and vid_ts > vid_mtime:
+        if kara.VideoUploaded and (
+            vid_ts > vid_mtime
+            or vid_size != kara.VideoSize
+            or (check_crc32 and vid_crc32 != kara.VideoCRC32)
+        ):
             await self.download_file("video", kid, vid_filename, vid_ts)
 
         sub_filename = self.karas_base_dir / f"{kid}.ass"
+        sub_crc32 = 0
         try:
             sub_stat = await asyncio.to_thread(sub_filename.stat)
             sub_mtime = sub_stat.st_mtime
+            sub_size = sub_stat.st_size
+            if check_crc32:
+                sub_crc32 = await calculate_crc32(sub_filename)
         except FileNotFoundError:
             sub_mtime = 0
+            sub_size = 0
 
         sub_ts = kara.SubtitlesModTime.timestamp()
-        if kara.SubtitlesUploaded and sub_ts > sub_mtime:
+        if kara.SubtitlesUploaded and (
+            sub_ts > sub_mtime
+            or sub_size != kara.SubtitlesSize
+            or (check_crc32 and sub_crc32 != kara.SubtitlesCRC32)
+        ):
             await self.download_file("sub", kid, sub_filename, sub_ts)
 
         inst_filename = self.karas_base_dir / f"{kid}.mka"
+        inst_crc32 = 0
         try:
             inst_stat = await asyncio.to_thread(inst_filename.stat)
             inst_mtime = inst_stat.st_mtime
+            inst_size = inst_stat.st_size
+            if check_crc32:
+                inst_crc32 = await calculate_crc32(inst_filename)
         except FileNotFoundError:
             inst_mtime = 0
+            inst_size = 0
 
         inst_ts = kara.InstrumentalModTime.timestamp()
-        if kara.InstrumentalUploaded and inst_ts > inst_mtime:
+        if kara.InstrumentalUploaded and (
+            inst_ts > inst_mtime
+            or inst_size != kara.InstrumentalSize
+            or (check_crc32 and inst_crc32 != kara.InstrumentalCRC32)
+        ):
             await self.download_file("inst", kid, inst_filename, inst_ts)
 
     async def download_font(self, font: Font) -> None:
@@ -282,6 +334,7 @@ async def sync(
     s3_region: str,
     dest_dir: Path,
     parallel: int = 4,
+    check_crc32: bool = False,
 ):
     s3_client = minio.Minio(
         endpoint=s3_endpoint,
@@ -301,7 +354,7 @@ async def sync(
 
         karas = await client.get_karas()
         for kara in karas:
-            _ = await sched.spawn(client.download(kara.ID))
+            _ = await sched.spawn(client.download(kara.ID, check_crc32=check_crc32))
 
 
 async def watch(
@@ -342,7 +395,7 @@ async def watch(
                 filename = entry["song"]["filename"]
                 karaberus_id_str, *_ = filename.partition(".")
                 karaberus_id = int(karaberus_id_str)
-                _ = await sched.spawn(client.download(karaberus_id))
+                _ = await sched.spawn(client.download(karaberus_id, check_crc32=True))
 
             await asyncio.sleep(10)
 
@@ -359,6 +412,7 @@ def main(
         Path | None, typer.Option("--directory", "-d", file_okay=False, dir_okay=True)
     ] = None,
     parallel: Annotated[int, typer.Option("--parallel", "-p")] = 4,
+    check_crc32: Annotated[bool, typer.Option("--check-crc32", "-C")] = False,
 ):
     if dest_dir is None:
         dest_dir = Path(".")
@@ -374,6 +428,7 @@ def main(
             s3_region,
             dest_dir,
             parallel,
+            check_crc32,
         )
     )
 
