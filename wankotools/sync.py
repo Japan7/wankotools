@@ -6,6 +6,7 @@ import os
 import re
 import zlib
 from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from types import TracebackType
 from typing import Annotated, Literal, TypedDict
@@ -33,7 +34,8 @@ download_backoff = backoff.on_exception(
 )
 
 
-def _calculate_crc32(file: Path) -> int:
+@lru_cache
+def _calculate_crc32(file: Path, _: float) -> int:
     sum = 0
     with file.open("rb") as fd:
         while buf := fd.read(1024 * 8):
@@ -42,10 +44,10 @@ def _calculate_crc32(file: Path) -> int:
     return sum
 
 
-async def calculate_crc32(file: Path) -> int:
+async def calculate_crc32(file: Path, mtime: float) -> int:
     with ProcessPoolExecutor() as pool:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(pool, _calculate_crc32, file)
+        return await loop.run_in_executor(pool, _calculate_crc32, file, mtime)
 
 
 class KaraberusKara(pydantic.BaseModel):
@@ -226,7 +228,7 @@ class KaraberusClient:
             vid_mtime = vid_stat.st_mtime
             vid_size = vid_stat.st_size
             if check_crc32:
-                vid_crc32 = await calculate_crc32(vid_filename)
+                vid_crc32 = await calculate_crc32(vid_filename, vid_mtime)
         except FileNotFoundError:
             vid_mtime = 0
             vid_size = 0
@@ -246,7 +248,7 @@ class KaraberusClient:
             sub_mtime = sub_stat.st_mtime
             sub_size = sub_stat.st_size
             if check_crc32:
-                sub_crc32 = await calculate_crc32(sub_filename)
+                sub_crc32 = await calculate_crc32(sub_filename, sub_mtime)
         except FileNotFoundError:
             sub_mtime = 0
             sub_size = 0
@@ -266,7 +268,7 @@ class KaraberusClient:
             inst_mtime = inst_stat.st_mtime
             inst_size = inst_stat.st_size
             if check_crc32:
-                inst_crc32 = await calculate_crc32(inst_filename)
+                inst_crc32 = await calculate_crc32(inst_filename, inst_mtime)
         except FileNotFoundError:
             inst_mtime = 0
             inst_size = 0
