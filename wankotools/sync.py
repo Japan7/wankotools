@@ -181,11 +181,11 @@ class KaraberusClient:
             # add 1 second just in case
             os.utime(filename, (ts + 1, ts + 1))
 
-    @download_backoff
     async def download_url(self, url: str, filename: Path, ts: float | None):
         resp = await self.client.get(url)
         await self._download(filename, resp, ts)
 
+    @download_backoff
     async def download_file(
         self,
         ftype: Literal["video", "sub", "inst", "font"],
@@ -206,6 +206,10 @@ class KaraberusClient:
             if ts is not None:
                 # add 1 second just in case
                 os.utime(filename, (ts + 1, ts + 1))
+
+        except asyncio.CancelledError as e:
+            await asyncio.to_thread(filename.unlink)
+            raise KaraberusIncompleteDownloadError() from e
 
         except BaseException as e:
             logger.exception(e)
