@@ -352,7 +352,7 @@ async def sync(
 
     async with (
         KaraberusClient(s3_client, base_url, dest_dir, token) as client,
-        aiojobs.Scheduler(limit=parallel) as sched,
+        aiojobs.Scheduler(limit=parallel, wait_timeout=None) as sched,
     ):
         fonts = await client.get_fonts()
         for font in fonts:
