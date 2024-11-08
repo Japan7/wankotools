@@ -209,10 +209,6 @@ class KaraberusClient:
                 # add 1 second just in case
                 os.utime(filename, (ts + 1, ts + 1))
 
-        except asyncio.CancelledError as e:
-            await asyncio.to_thread(filename.unlink)
-            raise KaraberusIncompleteDownloadError() from e
-
         except BaseException as e:
             logger.exception(e)
             await asyncio.to_thread(filename.unlink)
