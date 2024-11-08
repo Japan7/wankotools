@@ -211,7 +211,6 @@ class KaraberusClient:
 
         except BaseException as e:
             logger.exception(e)
-            await asyncio.to_thread(filename.unlink)
             raise
 
     async def download(self, kid: int, check_crc32: bool = False) -> None:
