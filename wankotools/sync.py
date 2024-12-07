@@ -29,7 +29,13 @@ class KaraberusIncompleteDownloadError(RuntimeError):
 
 download_backoff = backoff.on_exception(
     backoff.expo,
-    (httpcore.ReadTimeout, httpx.ReadTimeout, KaraberusIncompleteDownloadError),
+    (
+        httpcore.ConnectTimeout,
+        httpx.ConnectTimeout,
+        httpcore.ReadTimeout,
+        httpx.ReadTimeout,
+        KaraberusIncompleteDownloadError,
+    ),
     max_time=150,
 )
 
@@ -316,6 +322,7 @@ class DakaraClient:
     ):
         await self.client.__aexit__(exc_type, exc_value, traceback)
 
+    @download_backoff
     async def get_playlist_entries(self) -> DakaraPlaylistEntries:
         url = f"{self.base_url}/api/playlist/entries/"
 
