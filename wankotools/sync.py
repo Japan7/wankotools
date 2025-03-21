@@ -324,7 +324,7 @@ class DakaraClient:
 
     @download_backoff
     async def get_playlist_entries(self) -> DakaraPlaylistEntries:
-        url = f"{self.base_url}/api/playlist/entries/"
+        url = f"{self.base_url}/api/playlist/queueing/"
 
         resp = await self.client.get(url)
         _ = resp.raise_for_status()
